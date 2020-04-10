@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -25,6 +26,9 @@ var (
 	critPercent  int
 	warnCount    int
 	critCount    int
+	apiKey       string
+	apiURL       string
+	ignoreSsl    bool
 )
 
 type Auth struct {
@@ -57,6 +61,23 @@ func configureRootCommand() *cobra.Command {
 		Short: "The Sensu Go Event Aggregates Check plugin",
 		RunE:  run,
 	}
+	cmd.Flags().StringVarP(&apiKey,
+		"api-key",
+		"K",
+		"",
+		"Sensu Go Backend API Key (use instead of username/password")
+
+	cmd.Flags().StringVarP(&apiURL,
+		"url",
+		"U",
+		"",
+		"Sensu Go Backend URL (e.g., https://sensu-backend:8443)")
+
+	cmd.Flags().BoolVarP(&ignoreSsl,
+		"insecure",
+		"k",
+		false,
+		"Allow insecure server connections when using SSL")
 
 	cmd.Flags().StringVarP(&checkLabels,
 		"check-labels",
@@ -98,7 +119,7 @@ func configureRootCommand() *cobra.Command {
 		"api-pass",
 		"P",
 		"P@ssw0rd!",
-		"Sensu Go Backend API User")
+		"Sensu Go Backend API Password")
 
 	cmd.Flags().IntVarP(&warnPercent,
 		"warn-percent",
@@ -138,11 +159,21 @@ func run(cmd *cobra.Command, args []string) error {
 	return evalAggregate()
 }
 
-func authenticate() (Auth, error) {
+func authenticate(client *http.Client) (Auth, error) {
 	var auth Auth
+	var url string
+
+	if apiKey != "" {
+		return auth, nil
+	}
+	if apiURL != "" {
+		url = fmt.Sprintf("%s/auth", apiURL)
+	} else {
+		url = fmt.Sprintf("http://%s:%s/auth", apiHost, apiPort)
+	}
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("http://%s:%s/auth", apiHost, apiPort),
+		url,
 		nil,
 	)
 	if err != nil {
@@ -151,7 +182,7 @@ func authenticate() (Auth, error) {
 
 	req.SetBasicAuth(apiUser, apiPass)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return auth, err
 	}
@@ -215,8 +246,20 @@ func filterEvents(events []*types.Event) []*types.Event {
 	return result
 }
 
-func getEvents(auth Auth, namespace string) ([]*types.Event, error) {
-	url := fmt.Sprintf("http://%s:%s/api/core/v2/namespaces/%s/events", apiHost, apiPort, namespace)
+func createAuthorizationHeader(auth Auth) string {
+	if apiKey != "" {
+		return fmt.Sprintf("Key %s", apiKey)
+	}
+	return fmt.Sprintf("Bearer %s", auth.AccessToken)
+}
+
+func getEvents(client *http.Client, auth Auth, namespace string) ([]*types.Event, error) {
+	var url string
+	if apiURL != "" {
+		url = fmt.Sprintf("%s/api/core/v2/namespaces/%s/events", apiURL, namespace)
+	} else {
+		url = fmt.Sprintf("http://%s:%s/api/core/v2/namespaces/%s/events", apiHost, apiPort, namespace)
+	}
 	events := []*types.Event{}
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -224,10 +267,9 @@ func getEvents(auth Auth, namespace string) ([]*types.Event, error) {
 		return events, err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", auth.AccessToken))
+	req.Header.Set("Authorization", createAuthorizationHeader(auth))
 	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return events, err
 	}
@@ -240,6 +282,7 @@ func getEvents(auth Auth, namespace string) ([]*types.Event, error) {
 
 	err = json.Unmarshal(body, &events)
 	if err != nil {
+		fmt.Printf("Error from Sensu Backend: %s\n", body)
 		return events, err
 	}
 
@@ -249,8 +292,11 @@ func getEvents(auth Auth, namespace string) ([]*types.Event, error) {
 }
 
 func evalAggregate() error {
-	auth, err := authenticate()
+	config := &tls.Config{InsecureSkipVerify: ignoreSsl}
+	tr := &http.Transport{TLSClientConfig: config}
+	client := &http.Client{Transport: tr}
 
+	auth, err := authenticate(client)
 	if err != nil {
 		return err
 	}
@@ -258,7 +304,7 @@ func evalAggregate() error {
 	events := []*types.Event{}
 
 	for _, namespace := range strings.Split(namespaces, ",") {
-		selected, err := getEvents(auth, namespace)
+		selected, err := getEvents(client, auth, namespace)
 
 		if err != nil {
 			return err

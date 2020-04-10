@@ -17,7 +17,7 @@ metadata:
 spec:
   runtime_assets:
   - sensu-aggregate-check
-  command: sensu-aggregate-check --api-user=foo --api-pass=bar --check-labels='aggregate=healthz,app=dummy' --warn-percent=75 --crit-percent=50
+  command: sensu-aggregate-check --api-key foobar-foo-bar-foobar -U https://api --check-labels='aggregate=healthz,app=dummy' --warn-percent=75 --crit-percent=50
   subscriptions:
   - backend
   publish: true
@@ -30,6 +30,21 @@ spec:
 
 ## Usage Examples
 
+### Patch notes
+In our testing with sensu-go-backend-5.18.1-9930, we found using using a username/password sometimes results in a {"Code":4,"Message":"unauthorized to perform action"} response from the API.  We added API key support and this performs better in our environment.
+
+We also needed HTTPS support, so this patch allows -U/--url to specify an HTTPS (or HTTP) Sensu backend URL.  You can also specify -k to ignore self-signed certs.
+
+New options:
+ * -K --api-key
+ * -k --insecure trust unknown certs (like Curl)
+ * -U --url   specify a URL instead of host and port
+
+Using this patch, which allows an untrusted SSL cert, an API KEY, and a URL specifying HTTPS on port 8443
+```
+./sensu-aggregate-check --api-key 123456789-a7d3-1234-4567-1234567890 -k --url https://qammon1:8443 -l aggregate=test
+```
+
 Help:
 
 ```
@@ -40,6 +55,7 @@ Usage:
 
 Flags:
   -H, --api-host string        Sensu Go Backend API Host (e.g. 'sensu-backend.example.com') (default "127.0.0.1")
+  -K, --api-key string         Sensu Go Backend API Key (use instead of username/password
   -P, --api-pass string        Sensu Go Backend API User (default "P@ssw0rd!")
   -p, --api-port string        Sensu Go Backend API Port (e.g. 4242) (default "8080")
   -u, --api-user string        Sensu Go Backend API User (default "admin")
@@ -48,7 +64,9 @@ Flags:
   -c, --crit-percent int       Critical threshold - % of Events in critical state
   -e, --entity-labels string   Sensu Go Event Entity Labels to filter by (e.g. 'aggregate=foo,app=bar')
   -h, --help                   help for sensu-aggregate-check
+  -k, --insecure               Allow insecure server connections when using SSL
   -n, --namespaces string      Comma-delimited list of Sensu Go Namespaces to query for Events (e.g. 'us-east-1,us-west-2') (default "default")
+  -U, --url string             Sensu Go Backend URL (e.g., https://sensu-backend:8443)
   -W, --warn-count int         Warning threshold - count of Events in warning state
   -w, --warn-percent int       Warning threshold - % of Events in warning state
 ```
